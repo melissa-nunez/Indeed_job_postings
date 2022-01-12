@@ -1,0 +1,180 @@
+---
+title: "Scraping Indeed Data"
+author: "Melissa Nunez"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    theme: cosmo
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo = FALSE, fig.align="left")
+```
+
+
+```{r}
+library(rvest)
+library(plyr)
+library(dplyr)
+
+
+## Create all URLS - for each categry and borough
+
+sectors <- read_html("https://www.indeed.com/find-jobs.jsp")
+
+sectors <- sectors %>% html_nodes("ul#categories") %>% html_nodes("li") %>% html_text() %>% data.frame()
+
+colnames(sectors) <- "sectors"
+sectors$sectors <- as.character(sectors$sectors)
+sectors_clean <- gsub("/","+",sectors$sectors) %>% data.frame()
+colnames(sectors_clean) <- "sectors"
+sectors_clean$sectors <- gsub(" ","+",sectors_clean$sectors)
+sectors_clean$sectors <-  as.character(sectors_clean$sectors)
+sectors_clean <- sectors_clean[-3,]
+sectors_clean <- data.frame(sectors_clean)
+
+Boroughs <- data.frame(boro=c("Bronx","Staten+Island","Queens","Manhattan","Brooklyn","New+York"), id=c("609f72bcaf2fb185","92f5613fae65555c", "a036f550dfd81ea4", "ea5405905f293f14", "e69692d64317994a", "45f6c4ded55c00bf"))
+
+url_part1 <- sapply(1:26, function(x) paste("https://www.indeed.com/jobs?q=",sectors_clean$sectors[x],"&l=New+York+State&radius=25&rbl=", sep="")) 
+
+url_part2 <- unlist(lapply(1:6, function(x) paste(url_part1, as.character(Boroughs$boro)[x],"%2C+NY&jlid=", sep="")))
+
+urls <- c(paste(url_part2[1:26],Boroughs$id[1],"&sort=date&fromage=29&filter=0", sep = ""), paste(url_part2[27:52],Boroughs$id[2],"&sort=date&fromage=29&filter=0", sep = ""), paste(url_part2[53:78],Boroughs$id[3],"&sort=date&fromage=29&filter=0", sep = ""), paste(url_part2[79:104],Boroughs$id[4],"&sort=date&fromage=29&filter=0", sep = ""), paste(url_part2[105:130],Boroughs$id[5],"&sort=date&fromage=29&filter=0", sep = ""), paste(url_part2[131:156],Boroughs$id[6],"&sort=date&fromage=29&filter=0", sep = ""))
+
+urls <- urls %>% data.frame(stringsAsFactors=FALSE) %>% bind_cols(sectors=data.frame(rep(sectors_clean$sectors,6), stringsAsFactors=FALSE))
+
+
+```
+
+
+
+
+```{r}
+full_df <- data.frame()
+ 
+ for (x in 121:156) {
+   
+   # find out how many pages there are to be able to paginate through indeed
+   
+   address <- urls[x,1]
+   
+   page_link <- read_html(address)
+   pages <- page_link %>% html_nodes("div #searchCountPages") %>% html_text() %>%
+    stringi::stri_trim_both()
+   
+   # If there are no pages, i.e. results, then return NA
+   
+   if (length(pages)==0){
+     
+     df <- data.frame(title=NA, company=NA, location=NA, date=NA, url_desc=NA,sector=urls[x,2],num_jobs=0)
+     
+     full_df <- rbind(full_df, df)
+     
+   } else {
+   
+   total_jobs <- as.numeric(gsub(",","",strsplit(pages," ")[[1]][4]))
+   page_num <- ceiling(total_jobs/15)
+   
+
+## loop to read webpage and get info 
+   
+for (i in 0:page_num) {
+
+  webpage <- read_html(paste(address,"&start=", i, "0", sep=""))
+  
+  #loop to 
+
+Sys.sleep(2)
+
+title <- webpage %>% rvest::html_nodes("div") %>%
+    rvest::html_nodes(xpath = '//*[@data-tn-element = "jobTitle"]') %>%
+    rvest::html_attr("title")
+
+
+company.name <- webpage %>% 
+    rvest::html_nodes(xpath = '//*[@class="company"]')  %>%
+    rvest::html_text() %>%
+    stringi::stri_trim_both()
+
+job_location <- webpage %>% html_nodes("div") %>% html_nodes(".location.accessible-contrast-color-location") %>% rvest::html_text() %>%
+    stringi::stri_trim_both()
+
+date <- webpage %>% html_nodes("div") %>% html_nodes(".date") %>% html_text() 
+
+  links <- webpage %>% 
+    rvest::html_nodes("div") %>%
+    rvest::html_nodes(xpath = '//*[@data-tn-element="jobTitle"]') %>%
+    rvest::html_attr("href")
+    
+  url_desc <- c()
+  for(i in seq_along(links)) {
+  url_desc[i] <- paste0("https://indeed.com/", links[i])
+  }
+  
+  url_desc <- data.frame(url_desc)
+    
+  df <- data.frame(title=title) %>% merge(data.frame(company=company.name), by="row.names", all=T) %>% merge(data.frame(location=job_location), by="row.names", all=T) %>% merge(data.frame(date=date),by="row.names", all=T) %>% merge(url_desc,by="row.names", all=T) %>% merge(data.frame(sector=rep(urls[x,2], length(title))), by="row.names", all=T) %>% merge(data.frame(num_jobs=rep(total_jobs, length(title))), by="row.names", all=T)
+  
+  df <- df[,-c(1:6)]
+  
+  #colnames(df) <- c("title","company","location", "date", "url", "sector")
+  
+  full_df <- rbind(full_df, df)
+
+}
+   }
+ }
+
+full_df <- data.frame(lapply(full_df, as.character), stringsAsFactors=FALSE)
+
+library(dplyr)
+library(stringr)
+
+# Create copy of results, clean, and save as csv
+
+copy <- indeed %>% mutate(days=as.numeric(str_extract_all(indeed$date, "[0-9]+")))
+
+copy <- copy %>% mutate(days=ifelse(is.na(days),0,days))
+
+copy <- copy %>% mutate(date_formated=Sys.Date()-1-days)
+
+#write.csv(copy, "/Users/menunez/Desktop/indeed_dat.csv")
+
+```
+
+
+
+
+
+
+
+
+```{r}
+
+data <- webpage %>% html_node(".searchCount-a11y-contrast-color") %>% html_text()
+
+webpage %>% rvest::html_nodes("div") %>%
+    rvest::html_nodes(xpath = '//*[@data-tn-element = "jobTitle"]') %>%
+    rvest::html_attr("title")
+
+links <- webpage %>% 
+    rvest::html_nodes("div") %>%
+    rvest::html_nodes(xpath = '//*[@data-tn-element="jobTitle"]') %>%
+    rvest::html_attr("href")
+
+url <- paste0("https://indeed.com/",links[2])
+
+page <- read_html(url)
+
+page %>% 
+      rvest::html_nodes(".jobsearch-JobComponent-description") %>% html_nodes("p") %>% html_text()
+      stringi::stri_trim_both()
+      
+      colnames(title_df)[1] <- "position"
+      
+      title_df %>% mutate(position=as.character(position)) %>% group_by(position) %>% summarize(n())
+```
+
+

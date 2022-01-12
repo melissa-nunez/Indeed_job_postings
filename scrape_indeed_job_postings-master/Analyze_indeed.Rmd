@@ -1,0 +1,95 @@
+---
+title: "Explore NYC job market during covid-19 pandemic using indeed job listings as proxy for job demand"
+author: "Melissa Nunez"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    theme: cosmo
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo = FALSE, fig.align="left")
+```
+
+
+```{r}
+library(dplyr)
+library(zoo)
+library(ggplot2)
+
+indeed <- read.csv("/Users/menunez/Desktop/Indeed/indeed_updated_dat.csv")
+
+indeed <- indeed[,-c(1)]
+
+indeed <- indeed %>% mutate(date_formated=as.Date(date_formated))
+
+```
+
+
+```{r}
+library(readxl)
+library(tidyr)
+library(janitor)
+
+NAICS <- read_excel("/Users/menunez/Desktop/Indeed/Indeed_NAICS_Cats.xlsx") %>% clean_names()
+
+indeed <- NAICS %>% right_join(indeed, by=c("cat_1"="sector"))
+
+#table(NAICS$naics)
+
+indeed <- indeed %>% mutate(naics=ifelse(naics=="Administrative and Support and Waste Management and Remediation Services", "Admin, Support, Waste, & Remediation Services",naics))
+```
+
+
+
+# NYC
+```{r, fig.width=9}
+plot.dat <- indeed[,-c(which(colnames(indeed)=="url_desc"))] %>% unique() %>% group_by(date_formated) %>% summarize(count=n())
+
+ggplot(plot.dat, aes(x = date_formated, y = count)) + scale_x_date(date_labels = "%m/%d", date_breaks = "7 days") + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1), panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + geom_smooth(color="blue", method = "loess", size = 1, se = FALSE) + labs(title = "Daily Number of Indeed Job Postings in NYC") + xlab("Date") + ylab("Number of Postings")
+
+ggplot(plot.dat, aes(x = date_formated, y = count)) + scale_x_date(date_labels = "%m/%d", date_breaks = "7 days") + geom_point() + geom_line()
+
+# to remove seasonality
+#library(forecast)
+#trend = ma(plot.dat$count, order = 7, centre = T)
+
+#plot(as.ts(plot.dat$count))
+#lines(trend)
+#plot(as.ts(trend))
+
+#plot(as.ts(plot.dat$count))
+```
+
+
+### Percentage of Jobs in NYC by NAIC Sector
+```{r}
+indeed[,-c(which(colnames(indeed)=="url_desc"))] %>% unique() %>% group_by(naics) %>% summarize(count=n()) %>% mutate(percent=round((count/50405)*100,2)) %>% arrange(desc(percent)) %>% rename(number_of_postings=count)
+```
+
+
+### Top hiring companies in NYC in the last week (05/10/2020 - 05/16/2020)
+```{r}
+top_companies <- indeed[,-c(which(colnames(indeed)=="url_desc"))] %>% unique() %>% filter(date_formated >= as.Date("2020-05-10") & date_formated <= as.Date("2020-05-16")) %>% arrange(date_formated) %>% group_by(company) %>% summarize(count=n()) %>% arrange(desc(count)) %>% mutate(company=as.character(company))
+
+top_companies$recoded <- ifelse(top_companies$company %in% unlist(top_companies[which(grepl("amazon", top_companies$company, ignore.case = TRUE)),"company"]), "Amazon Services",top_companies$company)
+
+top_companies$recoded <- ifelse(top_companies$company %in% unlist(top_companies[which(grepl("life", top_companies$company, ignore.case = TRUE))[-c(5,7:9,11:13)],]), "New York Life",top_companies$recoded)
+
+#top_companies[which(grepl("usps", top_companies$company, ignore.case = TRUE)),]
+
+top_companies %>% group_by(recoded) %>% summarize(count2=sum(count)) %>% arrange(desc(count2)) %>% mutate(percent=round(count2/sum(count2)*100,2)) %>% rename(company=recoded, number_of_postings=count2) %>% top_n(10)
+```
+
+
+### Daily Postings by NAICS Sector
+```{r, fig.height=10, fig.width=17}
+ggplot(indeed %>% group_by(naics, date_formated) %>% summarize(count=n()), aes(x = date_formated, y = count)) + scale_x_date(date_labels = "%m/%d", date_breaks = "7 days") + theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1), panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + geom_smooth(color="blue", method = "loess", size = 1, se = FALSE) + facet_wrap(~naics,scales="free_y", ncol=5) + xlab("Date") + ylab("Number of Postings")
+
+sectors <- indeed %>% group_by(naics) %>% summarize(n()) %>% select(naics) 
+```
+
+
+
